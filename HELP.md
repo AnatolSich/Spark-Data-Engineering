@@ -394,4 +394,91 @@ the entire pipeline.
 
 ![Alt text](screens/Build-resil.jpg?raw=true "Optional Title")
 
+####7. Hybrid pipeline
 
+##### 1) Project requirements
+
+In streaming use case, we created a MariaDB table with five second summaries of the 
+last action performed by website users. We are going to use this table as the input, and then build a 
+downstream pipeline to analyze significant actions and maintain a running count table of the 
+significant actions. Please refer to the SetupPrerequisites.java class in the setup package of the Java 
+project if you need to understand the schema of the visit stats stable. Let's review the detail 
+requirements for the exercise. The task is to run a job every day and extract last action records with 
+a total duration of more than 15 seconds, within a five second window. make sure that 
+ there is already data available in count table. Next, stream 
+the significant last actions to a real-time Kafka topic. A topic called spark.exercise.lastaction.long has 
+already been created for you during the setup process for the course, then analyze the significant 
+actions in the Kafka topic in real time, and maintain a running counter of the significant last actions 
+by action name. This use case combines a batch processing task and a real-time processing task and 
+is an example of a hybrid pipeline.
+
+![Alt text](screens/Requrements.jpg?raw=true "Optional Title")
+
+##### 2) Solution design
+
+What would the hybrid pipeline for the course project look like? We start off with the MariaDB table 
+called visit_stats in the website_stats database. We first build a Long Last Action Extraction job. 
+Actions with long durations are considered significant actions. This job will filter records from the 
+database and extract those with the duration of greater than 15 seconds. Each of these records will 
+be published to the Kafka topic, spark.exercise.lastaction.long. We then build a second job Scorecard 
+For Last Action job. This job will listen to the Kafka topic in real time. The job will maintain a Redis 
+sorted set to track last actions and their counts. Each time a last action is received from the topic, the 
+sorted set will be incremented for that specific action. Let's proceed to the next video to review the 
+code for this exercise.
+
+![Alt text](screens/Design.jpg?raw=true "Optional Title")
+
+
+##### 3) Extracting long last actions
+
+Let us examine the example code for the first part of the exercise, extracting long last actions. The 
+code for this example is available in the calm.learnin.sparkdataengg chapter six package, The file is 
+LongLastActionExtractorJob.java. Please note that the original records were generated using system 
+date, when the website visits data generator was run. So use the right date ranges. First, we need to 
+extract the records from the MariaDB table. In order to take advantage of parallelism, we first find 
+the min and max bounds for the records using the bounds query. Then we define as spark session. 
+We execute the query to filter for long actions and store them in the last action data set. We take 
+advantage of parallelism by setting the relevant options for bounds and partitions. Next we extracted 
+last action column from the dataset and publish it to the Kafka topic: "spark.exercise.lastaction.long" 
+Finally, we print the total number of records that were fetched and published to the job. Let's run 
+this code and review the results. We see the last action count published as 26. Remember that the 
+source data was generated randomly. So this count may be different when you are running it on 
+your system. 
+
+![Alt text](screens/Extractor-job.jpg?raw=true "Optional Title")
+
+##### 4) Building a scorecard
+
+Let's build a running ScorecardForLongLastActions published to Kafka in the previous chapter. The 
+code for this is available in the ScoreCardForLastActionJob.java. To help 
+with managing the latest sorted set, we have the RedisWriter class. This RedisWriter maintains a 
+sorted list called Last-action-stats on the latest instance, running on Docker. It has functions to 
+maintain the sorted set. Here it increments by one, every time a last action occurs in the datastream. 
+Back to the main job ScoreCardForLastAction, we first define a SparkSession for the job. Since we 
+only have one value in the topic lastAction, we don't need to define a schema. We read the topic 
+directly into the raw lastAction dataset. From there we extract the value as lastAction into the 
+lastAction dataset. We print the schema, and we also print the contents to the console. To maintain 
+the latest sorted set, we use the .writeStream method and call the RedisWriter for each record. This 
+will update and maintain the latest sorted set. We will use the CountDownLatch to keep the job 
+running. In order to review the values in the sorted set, we also have a LastActionStatsBrowser. Let's 
+first start the browser.
+
+![Alt text](screens/Run-stat-browser.jpg?raw=true "Optional Title")
+
+ Now let's run this ScoreCardForLastActionJob.
+ 
+![Alt text](screens/Run-score-card.jpg?raw=true "Optional Title")
+
+ We also need to run the 
+LongLastActionExtractorJob in order to generate new records, as the ScoreCardForLastActionJob only 
+listens for new records. 
+
+![Alt text](screens/Run-action-extractor.jpg?raw=true "Optional Title")
+
+Now we see the records being received and processed by the ScoreCardJob. 
+
+![Alt text](screens/Records-received.jpg?raw=true "Optional Title")
+
+We also see the updated values in the LastActionStatsBrowser. 
+
+![Alt text](screens/Updated-values.jpg?raw=true "Optional Title")
