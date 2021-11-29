@@ -179,3 +179,219 @@ a central location, consolidated, and then persisted the results in a destinatio
 
 ![Alt text](screens/DB-browser.jpg?raw=true "Optional Title")
 
+
+####5. Real-time processing pipeline
+
+![Alt text](screens/Web-analit-scenario.jpg?raw=true "Optional Title")
+
+ The business scenario for the real time example is website analytics. An enterprise runs an 
+e-commerce website, selling multiple items like amazon.com. This website is used across multiple 
+countries. The enterprise wants to track visits to the website by its users. It wants to know about 
+the visit date, country, and duration for which the user stayed in the website. It also wants to track 
+the last action before the user exited out of the website. This last action may be in the catalog page, 
+the FAQ page, the shopping cart, or the order fulfillment page. To enable this real time analytics, 
+we need to build a pipeline that will receive a stream of website visit records. For each user who 
+visits this website, the stream will have one record. The record will contain the visit date, the last 
+action performed by the user, the country from where the browser session was initiated and the 
+duration of the visit. Using this information, we need to compute the following in real time. We need 
+to compute five second summaries by last action performed and write it to a database. We need to 
+keep track of the number of zips by users by each country. We also need to identify records where 
+the last action is shopping cart. Then this needs to be published into an abandoned shopping cart 
+queue for further downstream processing.
+
+![Alt text](screens/Web-analit-requirements.jpg?raw=true "Optional Title")
+
+ We have an Ecommerce application that is running in the cloud data center. The application creates 
+user visit records when the user exits the application and publishes them to a Kafka queue called 
+spark.streaming.website.visits. It's possible that the application is located in multiple data centers 
+across the globe. Even in such cases, the data is streamed into a single central Kafka queue. An 
+Apache spark job called Website Analytics runs and consumes the visit records in real time from the 
+Kafka queue. On the data that is received, it will execute multiple actions. First it computes five 
+second summaries and inserts them into a MariaDB database called website stats. A table called visit 
+stats is used to capture that information. Next, it maintains a running counter of the total duration 
+by country using a Redis sorted stat. Finally it filters those visits, which ended in the shopping cart 
+and publishes them to the spark.streaming.cards.abandoned topic. This solution is natively scalable. 
+Kafka provides scalable real-time streaming of data. Spark jobs can scale across multiple executor's 
+based on the incoming data load. Redis is a distributor real-time database, that again can scale 
+horizontally. Each executer can open individual connectors to MariaDB and insert summary records 
+in Bedale. Let's now proceed to implement and execute the solution.
+
+![Alt text](screens/Web-analit-design.jpg?raw=true "Optional Title")
+
+##### 1) Generating a visits data stream
+
+To execute the website visits by plane. We first need a streaming data source. Let's create an 
+example data stream. The visits data generator is available in the 
+website, visitsdatagenerator.javafile. We have already created the required Maria DB table and CAFCA 
+topics for this chapter. When we ran the setup prerequisites script earlier. In this Java 
+file, we simulate a data stream and publish it into a CAFCA topic. It implements the runnable 
+interface and will be called from the main code to trigger simulation in real time. In the run 
+muttered, we wait for five seconds to allow for the calling program to be set up. We then defined 
+various properties for the CAFCA instance, running in the Docker container we started earlier in the 
+course. We define a sample list of countries and the list of last actions. We also create a random 
+number generator. We then proceed to create a hundred sample visit records. For each record, we 
+pick a random country and last action from the predefined list. We also set the time to the current 
+time. We set the duration to a random value. We form adjacent record for this visit with all the 
+simulated attributes. Then, we publish the data to the CAFCA topic, spark.streaming.website.visits. 
+We then print the data published to the console. We will now proceed to create the main website 
+analytics spark job
+
+##### 2) Building a website analytics job
+
+Let's start building the streaming website analytics job now. the code for this is available in the 
+streaming website, analytics store, Java class. In this job, we first set up the Hadoop home data tree 
+property if it is a windows based system. Next, we need to set up a Rediswriter client. The client is 
+available in the Rediswriter .java class. This is a simple client that connects to the writers running in 
+the Docker container we set up earlier in the course. It manages a socket set called country stats. 
+The setup method clears the key if it already exists. The open method opens a writers connection. 
+The process method increments the counter for the exalted set with a specific country as the key and 
+duration as the value. We also have a Maria DB manager that manages connections to a Maria DB 
+database. The Maria DB writer is used to write records to the database through the Maria DB 
+manager. Now back to the main job. We initiate the website visits data generator in a separate 
+thread and start the thread. This will start publishing, visit data into the Kafka topic, which will 
+immediately be consumed by the job. In the job, we define a schema for the visit record received 
+through Kafka. Then, we initiate a spark session with local as the master. This runs an embedded 
+spark instance. We then proceed to subscribe and receive visit data from the Kafka topic. To extract 
+relevant attributes from the Kafka record, we use the schema defined earlier and cast the values to 
+specific columns. We print the scheme I received as well as the data received from the spark data 
+frame to the console. The first analysis we perform is to filter for records where the last action is 
+shopping cart. We publish these records to a Kafka topic called spark.streaming.carts.abandoned. 
+Here, we first format the record into a CSV and then publish to Kafka. Next, we updated this to 
+maintain a running counter by country. The Rediswriter class is used for this purpose. Finally, we 
+will compute five second summaries. For this, we first create a watermark with an even time using 
+the timestamp attribute that is part of the visit record. Then, we group by timestamp and last action 
+and find the sum of the duration. To write this data to Maria DB, we will use the Maria DB writer 
+instance. There will be one instance created for each of the executors. These three tasks will run 
+continuously in parallel. As new records are received from Kafka. Finally, we will start a 
+CountDownLatch to keep the program running.
+
+The real time pipeline writes to three different destinations, namely, Kafka, MariaDB and Redis. We 
+need to monitor these destinations to make sure that they are updated while the pipeline is running. 
+For this purpose, we have some utility browser classes available. Let's start with them. We start with 
+the ShoppingCartTopicBrowser.java. This class listens on abandoned carts topic and prints the 
+records as they are received.
+ 
+ ![Alt text](screens/Country-stats-browser.jpg?raw=true "Optional Title")
+ 
+ Let's execute this topic browser. It will wait until new messages are 
+received. 
+
+![Alt text](screens/Visit-stats-DBbrowser.jpg?raw=true "Optional Title")
+
+Next, we go to the CountryStatsBrowser.java. This reads the sorted set from Redis and 
+prints the duration every five seconds. Let's start this browser too. We then move on to the 
+VisitStatsDBBrowser.java. 
+
+![Alt text](screens/Streaming-analyt.jpg?raw=true "Optional Title")
+
+This class reads the visit stats table every five seconds and prints the total 
+count and duration. Let's start this browser too. Finally, let's go back to the main program, 
+StreamingWebsiteAnalytics.Java. Let's run this code. We see the Kafka data generator generating 
+sample records into Kafka topics. The records are being received and processed. Now we will look at 
+the country stats browser. 
+
+![Alt text](screens/Country-stats-browser5.jpg?raw=true "Optional Title")
+
+
+We see the counts being updated every five seconds. We move on to the 
+visit stats browser. We see that the number of visits stats records are increasing also every five 
+seconds. Note that there is a watermark set, so it will take some time before we start seeing records 
+here. 
+
+![Alt text](screens/Visit-stats-DBbrowser5.jpg?raw=true "Optional Title")
+
+Finally, we look at the shopping cart topic browser. We see that the records for shopping carts 
+are now available in this topic. One key error to watch out is for checkpoint location rights. If there 
+are failures right into checkpoint locations, then the pipeline may not work. Try changing the 
+checkpoint location to new values if you face this error. This completes our example for Real time 
+Data Engineering with Apache Spark.
+
+![Alt text](screens/Streaming-analyt5.jpg?raw=true "Optional Title")
+
+####6. Spark best practices
+
+##### 1) Batch vs. real-time options
+
+Data engineers and architects have a tendency to build all pipelines as real-time pipelines whenever 
+possible. The key justification is that it is super fast, would generate the required insights instantly, 
+and enable business actions. It is also considered cool in the data engineering world, but before 
+jumping into building real-time pipelines, we need to understand the complexities involved. 
+Real-time pipelines deal with unbounded datasets. This makes it difficult to size compute resources 
+like memory and clusters. When doing time-based aggregations, we need to deal with windowing 
+and watermarks. Irrespective of how delayed the watermarks are, we do end up with missed events 
+and incorrect aggregations. Real-time state management is another challenge to ensure that state is 
+properly maintained across the Spark cluster. Reprocessing of events is complex when issues 
+happen. It is not a simple redo of the job, but a number of items need to be reset like checkpoints 
+and state. So, when building a pipeline, it's important to analyze the requirements thoroughly before 
+deciding if a real-time pipeline is appropriate for the use case. Go for real-time pipelines when 
+responses, analytics and actions are needed with latency of few seconds. Do make sure that this is a 
+mandatory requirement, not a nice one to have. If this pipeline needs to process a continuous 
+stream of real-time events, then real-time pipelines are a good choice. The processing should also 
+involve minimal and mandatory aggregation and analytics. Adding too many aggregation steps will 
+introduce complexity with watermarks and state management. Make sure that the compute resources 
+are sufficiently available for real time pipelines. Choose real-time pipelines only when the use case 
+demands it. You can also build hybrid pipelines where part of the pipeline is real-time and the rest is 
+batch.
+
+![Alt text](screens/Real-time.jpg?raw=true "Optional Title")
+
+##### 2) Scaling extraction and loading operations
+
+When scaling a data engineering pipeline, all stages in the pipeline need to scale in order for the 
+entire pipeline to scale. Extracting data and loading process data into destinations are time 
+consuming as they usually deal with this discreets and rights. How do we scale these steps when 
+building pipelines with Apache Spark? Let's start with data extraction. 
+
+![Alt text](screens/Scale-extr.jpg?raw=true "Optional Title")
+
+Sparks support parallel 
+extraction of data from various data sources. For example, Spark can read JDBC records, in parallel, 
+across its executors. Similarly, it can divide up Kafka partitions between executors and process them 
+in parallel. With the data source being used, analyze the out of the box options provided by Spark for 
+that data source. Explore these options for parallel reads of data while maintaining data consistency. 
+If possible, choose a source technology and build the source schema in such a way to suit parallel 
+operations. This option is only available if the source systems are also being designed and built at 
+the same time as the data engineering pipelines. Spark support predicate push downs. This pushes 
+don't filtering operations to the data sources so unwanted records are not read into memory. 
+Leverage them when possible. When doing parallel extractions, build defenses against missed 
+records and duplicate records to ensure accurate results. What about loading data after processing 
+into data sinks? Each Spark executor can write independently and in parallel to a data sink for most 
+out of the box data sinks. Analyze how Spark works with a specific data sink technology like RDBMS 
+or a Kafka queue. Understand the impact of record additions and updates on transactions, locking, 
+and serialization. You may have to limit the number of parallel connections to the sink based on 
+supported capacity and parallelism. Repartitioning RDDs is an effective way to control parallelism. 
+Finally, build defenses against missed updates and duplicate updates.
+
+![Alt text](screens/Scale-load.jpg?raw=true "Optional Title")
+
+##### 3) Scaling processing operations
+
+ Apache Spark is built for massive distributed operations, but care should be taken during pipeline 
+design to our choke points and shuffles between executors. Filter any unwanted data as early as 
+possible in the pipeline. This reduces the amount of data kept in memory and move around 
+executors. Minimize reduce operations and associated shuffling early in the pipeline. If needed, 
+move down to the end of the pipeline as much as possible. Repartition data as needed to reduce the 
+number of partitions. Certain operations have the tendency to create too many RDDs, so keep track 
+of this. Cache results in the pipeline when appropriate to reduce reprocessing of data. Avoid actions 
+that send back data to the driver program until the end. This minimizes shuffles between executors.
+
+![Alt text](screens/Scale-proc.jpg?raw=true "Optional Title")
+
+##### 4) Building resiliency
+
+When we build scalable data pipelines, we also need to build resilience into them to make sure that 
+the pipelines can support critical operations and deliver reliable outcomes. Apache Spark provides 
+various resilience capabilities out of the box against failures. It handles failures at a task level, stage 
+level and executor level. That is an important reason to use Apache Spark. However, some additional 
+considerations are required to make the solution resilient. Monitor Spark jobs and Spark clusters for 
+unhandled failures. Create alerting systems by which required personnel are informed and problems 
+can be fixed quickly. Use checkpoints for streaming jobs with persistent data stores. Even if Spark 
+restarts, it can resume from where it left off. Build resilience in associated input stores and output 
+sinks. After all, it's not enough for Spark jobs to be resilient, but the entire solution should be. 
+Choose data stores that provide redundancy and persistence of data. The compute infrastructure 
+needs resilience, too. Deploy Spark on cluster setups, so failure of one node does not bring down 
+the entire pipeline.
+
+![Alt text](screens/Build-resil.jpg?raw=true "Optional Title")
+
+
